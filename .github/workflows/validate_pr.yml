@@ -1,0 +1,62 @@
+# .github/workflows/validate_pr.yml
+# ────────────────────────────────────
+# Automatically validates Pull Requests that add papers to papers.jsonl
+#
+# What this does:
+#   When anyone submits a PR that modifies papers.jsonl, this workflow:
+#   1. Finds every new PMID added in the PR
+#   2. Looks up each PMID on PubMed to verify it exists
+#   3. Checks the paper title contains keywords relevant to your KB scope
+#   4. Posts a detailed comment on the PR with validation results
+#   5. Fails the check if any PMID is invalid or irrelevant
+#
+# Why this matters:
+#   Without this, you would have to manually check every submitted paper.
+#   With this, GitHub does it automatically — you only review PRs that
+#   have already passed automated validation.
+#
+# Triggers:
+#   - Any PR that adds or modifies data/papers.jsonl
+#   - Can also be triggered manually from the Actions tab
+
+name: Validate PR — Paper Submissions
+
+on:
+  pull_request:
+    paths:
+      - "data/papers.jsonl"
+  workflow_dispatch:   # allows manual trigger from GitHub Actions tab
+
+jobs:
+  validate-papers:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write   # needed to post comments on PRs
+
+    steps:
+      # ── Step 1: Check out the code ─────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # fetch full history so we can diff against base branch
+
+      # ── Step 2: Set up Python ──────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ── Step 3: Install only what the validator needs ──────────────────────
+      - name: Install dependencies
+        run: pip install requests
+
+      # ── Step 4: Run the validation script ─────────────────────────────────
+      - name: Validate submitted papers
+        id: validate
+        env:
+          NCBI_API_KEY: ${{ secrets.NCBI_API_KEY }}   # stored in GitHub Secrets
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # automatically provided
+          PR_NUMBER:    ${{ github.event.pull_request.number }}
+          BASE_SHA:     ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA:     ${{ github.event.pull_request.head.sha }}
+        run: python scripts/validate_pr_papers.py

@@ -1,0 +1,97 @@
+# .github/workflows/weekly_update.yml
+# ─────────────────────────────────────
+# Runs every Monday at 7am UTC to keep your knowledge base current.
+#
+# What it does:
+#   1. Checks out your repo on GitHub's servers
+#   2. Installs all dependencies from requirements.txt
+#   3. Runs the pipeline in --update mode (last 7 days of papers only)
+#   4. Commits the updated papers.jsonl back to the repo
+#   5. You see a new commit every Monday with fresh papers added
+#
+# Why this matters:
+#   Without this, your KB freezes at whatever papers existed when you
+#   last ran the pipeline manually. With this, it stays current forever
+#   with zero effort from you.
+#
+# Cost: completely free for public repositories on GitHub.
+#
+# To trigger manually:
+#   Go to your repo on GitHub → Actions tab → weekly_update → Run workflow
+
+name: Weekly Knowledge Base Update
+
+on:
+  schedule:
+    # Runs every Monday at 7:00 AM UTC
+    # Cron format: minute hour day-of-month month day-of-week
+    - cron: "0 7 * * 1"
+  workflow_dispatch:   # allows manual trigger from GitHub Actions tab
+
+jobs:
+  update-knowledge-base:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Step 1: Check out the repository ───────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Use a token with write access so we can push the updated manifest
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Step 2: Set up Python 3.11 ─────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"   # caches pip packages between runs to speed up
+
+      # ── Step 3: Install dependencies ───────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Step 4: Run the update pipeline ────────────────────────────────────
+      # Uses --update mode: only fetches papers from the last 7 days
+      # Uses --limit 50: caps at 50 results per query to keep runtime under 10min
+      - name: Run ingestion pipeline (update mode)
+        env:
+          ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
+          VOYAGE_API_KEY:           ${{ secrets.VOYAGE_API_KEY }}
+          PINECONE_API_KEY:         ${{ secrets.PINECONE_API_KEY }}
+          COHERE_API_KEY:           ${{ secrets.COHERE_API_KEY }}
+          NCBI_API_KEY:             ${{ secrets.NCBI_API_KEY }}
+          SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
+          UNPAYWALL_EMAIL:          ${{ secrets.UNPAYWALL_EMAIL }}
+          PINECONE_INDEX_NAME:      pharma-lit-rag
+          PINECONE_ENVIRONMENT:     us-east-1-aws
+          EMBEDDING_MODEL:          voyage-3
+          LLM_MODEL:                claude-sonnet-4-6
+          CHUNK_SIZE:               "600"
+          CHUNK_OVERLAP:            "100"
+          TOP_K_RETRIEVAL:          "8"
+        run: |
+          python ingestion/pipeline.py --update --limit 50
+
+      # ── Step 5: Commit updated manifest back to repo ────────────────────────
+      # Only commits if papers.jsonl actually changed (new papers were found)
+      - name: Commit updated papers manifest
+        run: |
+          git config --global user.name  "pharma-lit-rag bot"
+          git config --global user.email "uge2@pitt.edu"
+
+          # Stage only the manifest file — never commit .env or other secrets
+          git add data/papers.jsonl
+
+          # Check if there are actually changes to commit
+          if git diff --staged --quiet; then
+            echo "No new papers found this week — nothing to commit"
+          else
+            # Count how many lines were added
+            NEW_LINES=$(git diff --staged --numstat data/papers.jsonl | awk '{print $1}')
+            git commit -m "Weekly update: +${NEW_LINES} new papers [$(date +'%Y-%m-%d')]"
+            git push
+            echo "✓ Committed and pushed ${NEW_LINES} new papers"
+          fi
